@@ -1,4 +1,4 @@
-from .rpc_methods import RpcMethodsBase, RpcUtilityMethods
+from .rpc_methods import RpcMethodsBase, RpcUtilityMethods, rpc_call
 from .websocket_rpc_client import WebSocketRpcClient
 from .websocket_rpc_client import ProxyEnabledWebSocketClientHandler 
 from .websocket_rpc_client import WebSocketsClientHandler

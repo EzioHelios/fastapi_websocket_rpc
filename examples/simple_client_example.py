@@ -1,12 +1,13 @@
 import asyncio
-from fastapi_websocket_rpc import RpcMethodsBase, WebSocketRpcClient
+from fastapi_websocket_rpc import WebSocketRpcClient
+from .simple_server_example import ConcatServer
 
 PORT = 9000
 
 async def run_client(uri):
-    async with WebSocketRpcClient(uri, RpcMethodsBase()) as client:
+    async with WebSocketRpcClient(uri, ConcatServer()) as client:
         # call concat on the other side
-        response = await client.other.concat(a="hello", b=" world")
+        response = await client.other.get_method("concat")(a="hello", b=" world")
         # print result
         print(response.result)  # will print "hello world"
 

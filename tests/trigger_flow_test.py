@@ -5,10 +5,11 @@
 import os
 import sys
 
+from fastapi_websocket_rpc.rpc_channel import RpcChannel
 from fastapi_websocket_rpc.utils import gen_uid
 from fastapi_websocket_rpc.websocket_rpc_endpoint import WebsocketRPCEndpoint
 from fastapi_websocket_rpc.websocket_rpc_client import WebSocketRpcClient
-from fastapi_websocket_rpc.rpc_methods import RpcMethodsBase
+from fastapi_websocket_rpc.rpc_methods import RpcMethodsBase, rpc_call
 from fastapi import (APIRouter, FastAPI,
                      WebSocket)
 import uvicorn
@@ -29,11 +30,12 @@ MESSAGE = "Good morning!"
 ############################ Server ############################
 
 class ServerMethods(RpcMethodsBase):
+    @rpc_call("register_wake_up_call")
 
-    async def register_wake_up_call(self, time_delta: float, name: str) -> str:
+    async def register_wake_up_call(self, time_delta: float, name: str) -> bool:
         async def wake_up_call():
             await asyncio.sleep(time_delta)
-            await self.channel.other.wake_up(message=MESSAGE, name=name)
+            await self.channel.other.get_method("wake_up")(message=MESSAGE, name=name)
         asyncio.create_task(wake_up_call())
         return True
 
@@ -73,6 +75,7 @@ class ClientMethods(RpcMethodsBase):
         self.message = None
         self.name = None
 
+    @rpc_call("wake_up")
     async def wake_up(self, message=None, name=None):
         self.message = message
         self.name = name
@@ -91,7 +94,7 @@ async def test_trigger_flow(server):
         time_delta = 0.5
         name = "Logan Nine Fingers"
         # Ask for a wake up call
-        await client.other.register_wake_up_call(time_delta=time_delta, name=name)
+        await client.other.get_method("register_wake_up_call")(time_delta=time_delta, name=name)
         # Wait for our wake-up call (or fail on timeout)
         await asyncio.wait_for(client.methods.woke_up_event.wait(), 5)
         # Note: each channel has its own copy of the methods object
@@ -107,9 +110,9 @@ async def test_on_connect_trigger(server):
     time_delta = 0.5
     name = "Logan Nine Fingers"
 
-    async def on_connect(channel):
+    async def on_connect(channel: RpcChannel):
         # Ask for a wake up call
-        await channel.other.register_wake_up_call(time_delta=time_delta, name=name)
+        await channel.other.get_method("register_wake_up_call")(time_delta=time_delta, name=name)
         # Wait for our wake-up call (or fail on timeout)
 
 

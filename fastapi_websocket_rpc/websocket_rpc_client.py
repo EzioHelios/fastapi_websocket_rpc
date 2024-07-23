@@ -1,17 +1,35 @@
 import asyncio
 import logging
-from typing import Coroutine, Dict, List, Type
+from typing import TYPE_CHECKING, Any, Dict, Generic, List, Type, cast
 from tenacity import retry, wait
 import tenacity
 from tenacity.retry import retry_if_exception
 
 import websockets
-from websockets.exceptions import InvalidStatusCode, WebSocketException, ConnectionClosedError, ConnectionClosedOK
+from websockets.exceptions import (
+    InvalidStatusCode,
+    WebSocketException,
+    ConnectionClosedError,
+    ConnectionClosedOK,
+)
 
-from .rpc_methods import PING_RESPONSE, RpcMethodsBase
-from .rpc_channel import RpcChannel, OnConnectCallback, OnDisconnectCallback
+from fastapi_websocket_rpc.schemas import RpcResponse
+
+from .rpc_methods import PING_RESPONSE, MethodsT, RpcMethodsBase
+from .rpc_channel import (
+    DEFAULT_TIMEOUT,
+    RpcCaller,
+    RpcChannel,
+    OnConnectCallback,
+    OnDisconnectCallback,
+)
 from .logger import get_logger
-from .simplewebsocket import SimpleWebSocket, JsonSerializingWebSocket
+from .simplewebsocket import (
+    ClientT,
+    SerializerT,
+    SimpleWebSocket,
+    JsonSerializingWebSocket,
+)
 
 logger = get_logger("RPC_CLIENT")
 
@@ -21,17 +39,22 @@ except ImportError:
     # Websocket-client optional module not installed.
     pass
 
-class ProxyEnabledWebSocketClientHandler (SimpleWebSocket):
+if TYPE_CHECKING:
+    import websocket
+
+
+class ProxyEnabledWebSocketClientHandler(SimpleWebSocket):
     """
     Handler that use https://websocket-client.readthedocs.io/en/latest module.
     This implementation supports HTTP proxy, though HTTP_PROXY and HTTPS_PROXY environment variable.
     This is not documented, but in code, see https://github.com/websocket-client/websocket-client/blob/master/websocket/_url.py#L163
-    The module is not written as coroutine: https://websocket-client.readthedocs.io/en/latest/threading.html#asyncio-library-usage, so 
+    The module is not written as coroutine: https://websocket-client.readthedocs.io/en/latest/threading.html#asyncio-library-usage, so
     as a workaround, the send/recv are called in "run_in_executor" method.
     TODO: remove this implementation after https://github.com/python-websockets/websockets/issues/364 is fixed and use WebSocketsClientHandler instead.
 
     Note: the connect timeout, if not specified, is the default socket connect timeout, which could be around 2min, so a bit longer than WebSocketsClientHandler.
     """
+
     def __init__(self):
         self._websocket = None
 
@@ -41,9 +64,12 @@ class ProxyEnabledWebSocketClientHandler (SimpleWebSocket):
             https://websocket-client.readthedocs.io/en/latest/examples.html#connection-options
             https://websocket-client.readthedocs.io/en/latest/core.html#websocket._core.WebSocket.connect
     """
+
     async def connect(self, uri: str, **connect_kwargs):
         try:
-            self._websocket = await asyncio.get_event_loop().run_in_executor(None, websocket.create_connection, uri, **connect_kwargs)
+            self._websocket = await asyncio.get_event_loop().run_in_executor(
+                None, websocket.create_connection, uri, **connect_kwargs
+            )
         # See https://websocket-client.readthedocs.io/en/latest/exceptions.html
         except websocket._exceptions.WebSocketAddressException:
             logger.info("websocket address info cannot be found")
@@ -52,11 +78,12 @@ class ProxyEnabledWebSocketClientHandler (SimpleWebSocket):
             logger.info("bad handshake status code")
             raise
         except websocket._exceptions.WebSocketConnectionClosedException:
-            logger.info("remote host closed the connection or some network error happened")
+            logger.info(
+                "remote host closed the connection or some network error happened"
+            )
             raise
         except websocket._exceptions.WebSocketPayloadException:
-            logger.info(
-                f"WebSocket payload is invalid")
+            logger.info(f"WebSocket payload is invalid")
             raise
         except websocket._exceptions.WebSocketProtocolException:
             logger.info(f"WebSocket protocol is invalid")
@@ -71,18 +98,20 @@ class ProxyEnabledWebSocketClientHandler (SimpleWebSocket):
             logger.exception("RPC Error")
             raise
 
-    async def send(self, msg):
+    async def send(self, data):
         if self._websocket is None:
             # connect must be called before.
             logging.error("Websocket connect() must be called before.")
-        await asyncio.get_event_loop().run_in_executor(None, self._websocket.send, msg)
+        await asyncio.get_event_loop().run_in_executor(None, self._websocket.send, data)
 
     async def recv(self):
         if self._websocket is None:
             # connect must be called before.
             logging.error("Websocket connect() must be called before.")
         try:
-            msg = await asyncio.get_event_loop().run_in_executor(None, self._websocket.recv)
+            msg = await asyncio.get_event_loop().run_in_executor(
+                None, self._websocket.recv
+            )
         except websocket._exceptions.WebSocketConnectionClosedException as err:
             logger.debug("Connection closed.", exc_info=True)
             # websocket.WebSocketConnectionClosedException means remote host closed the connection or some network error happened
@@ -95,11 +124,13 @@ class ProxyEnabledWebSocketClientHandler (SimpleWebSocket):
             # Case opened, we have something to close.
             self._websocket.close(code)
 
+
 class WebSocketsClientHandler(SimpleWebSocket):
     """
     Handler that use https://websockets.readthedocs.io/en/stable module.
     This implementation does not support HTTP proxy (see https://github.com/python-websockets/websockets/issues/364).
     """
+
     def __init__(self):
         self._websocket = None
 
@@ -108,6 +139,7 @@ class WebSocketsClientHandler(SimpleWebSocket):
         **kwargs: Additional args passed to connect
             https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html#opening-a-connection
     """
+
     async def connect(self, uri: str, **connect_kwargs):
         try:
             self._websocket = await websockets.connect(uri, **connect_kwargs)
@@ -122,7 +154,8 @@ class WebSocketsClientHandler(SimpleWebSocket):
             raise
         except InvalidStatusCode as err:
             logger.info(
-                f"RPC Websocket failed - with invalid status code {err.status_code}")
+                f"RPC Websocket failed - with invalid status code {err.status_code}"
+            )
             raise
         except WebSocketException as err:
             logger.info(f"RPC Websocket failed - with {err}")
@@ -134,16 +167,18 @@ class WebSocketsClientHandler(SimpleWebSocket):
             logger.exception("RPC Error")
             raise
 
-    async def send(self, msg):
+    async def send(self, data):
         if self._websocket is None:
             # connect must be called before.
             logging.error("Websocket connect() must be called before.")
-        await self._websocket.send(msg)
+            return
+        await self._websocket.send(data)
 
     async def recv(self):
         if self._websocket is None:
             # connect must be called before.
             logging.error("Websocket connect() must be called before.")
+            return
         try:
             msg = await self._websocket.recv()
         except websockets.exceptions.ConnectionClosed:
@@ -154,7 +189,8 @@ class WebSocketsClientHandler(SimpleWebSocket):
     async def close(self, code: int = 1000):
         if self._websocket is not None:
             # Case opened, we have something to close.
-            self._websocket.close(code)
+            await self._websocket.close(code)
+
 
 def isNotInvalidStatusCode(value):
     return not isinstance(value, InvalidStatusCode)
@@ -165,24 +201,32 @@ def isNotForbbiden(value) -> bool:
     Returns:
         bool: Returns True as long as the given exception value is not InvalidStatusCode with 401 or 403
     """
-    return not (isinstance(value, InvalidStatusCode) and (value.status_code == 401 or value.status_code == 403))
+    return not (
+        isinstance(value, InvalidStatusCode)
+        and (value.status_code == 401 or value.status_code == 403)
+    )
 
 
-class WebSocketRpcClient:
+class WebSocketRpcClient(Generic[MethodsT, SerializerT, ClientT]):
     """
     RPC-client to connect to an WebsocketRPCEndpoint
     Can call methods exposed by server
     Exposes methods that the server can call
     """
 
+    methods: MethodsT
+    channel: RpcChannel[MethodsT, SerializerT]
+    ws: SerializerT
+
+    @staticmethod
     def logerror(retry_state: tenacity.RetryCallState):
         logger.exception(retry_state.outcome.exception())
 
     DEFAULT_RETRY_CONFIG = {
-        'wait': wait.wait_random_exponential(min=0.1, max=120),
-        'retry': retry_if_exception(isNotForbbiden),
-        'reraise': True,
-        "retry_error_callback": logerror
+        "wait": wait.wait_random_exponential(min=0.1, max=120),
+        "retry": retry_if_exception(isNotForbbiden),
+        "reraise": True,
+        "retry_error_callback": logerror,
     }
 
     # RPC ping check on successful Websocket connection
@@ -192,15 +236,19 @@ class WebSocketRpcClient:
     # How many times to try re-pinging before rejecting the entire connection
     MAX_CONNECTION_ATTEMPTS = 5
 
-    def __init__(self, uri: str, methods: RpcMethodsBase = None,
-                 retry_config=None,
-                 default_response_timeout: float = None,
-                 on_connect: List[OnConnectCallback] = None,
-                 on_disconnect: List[OnDisconnectCallback] = None,
-                 keep_alive: float = 0,
-                 serializing_socket_cls: Type[SimpleWebSocket] = JsonSerializingWebSocket,
-                 websocket_client_handler_cls: Type[SimpleWebSocket] = WebSocketsClientHandler,
-                 **kwargs):
+    def __init__(
+        self,
+        uri: str,
+        methods: MethodsT | None = None,
+        retry_config=None,
+        default_response_timeout: float | None = None,
+        on_connect: List[OnConnectCallback] | None = None,
+        on_disconnect: List[OnDisconnectCallback] | None = None,
+        keep_alive: float = 0,
+        serializing_socket_cls: Type[SerializerT] = JsonSerializingWebSocket,
+        websocket_client_handler_cls: Type[ClientT] = WebSocketsClientHandler,
+        **kwargs,
+    ):
         """
         Args:
             uri (str): server uri to connect to (e.g. 'http://localhost/ws/client1')
@@ -220,10 +268,8 @@ class WebSocketRpcClient:
                 response = await client.call("echo", {'text': "Hello World!"})
                 print (response)
         """
-        self.methods = methods or RpcMethodsBase()
+        self.methods = methods or cast(MethodsT, RpcMethodsBase())
         self.connect_kwargs = kwargs
-        # Websocket object
-        self.ws = None
         # URI to connect on
         self.uri = uri
         # Pending requests - id mapped to async-event
@@ -237,9 +283,9 @@ class WebSocketRpcClient:
         self._keep_alive_interval = keep_alive
         # defaults
         self.default_response_timeout = default_response_timeout
-        # RPC channel
-        self.channel = None
-        self.retry_config = retry_config if retry_config is not None else self.DEFAULT_RETRY_CONFIG
+        self.retry_config = (
+            retry_config if retry_config is not None else self.DEFAULT_RETRY_CONFIG
+        )
         # Event handlers
         self._on_disconnect = on_disconnect
         self._on_connect = on_connect
@@ -259,13 +305,16 @@ class WebSocketRpcClient:
             raise
         # No try/catch for connect() to avoid double error logging. Any exception from the method must be handled by
         # itself for logging, then raised and caught outside of connect() (e.g.: for retry purpose).
-        # Start connection 
+        # Start connection
         await self.ws.connect(self.uri, **self.connect_kwargs)
         try:
             try:
                 # Init an RPC channel to work on-top of the connection
                 self.channel = RpcChannel(
-                    self.methods, self.ws, default_response_timeout=self.default_response_timeout)
+                    self.methods,
+                    self.ws,
+                    default_response_timeout=self.default_response_timeout,
+                )
                 # register handlers
                 self.channel.register_connect_handler(self._on_connect)
                 self.channel.register_disconnect_handler(self._on_disconnect)
@@ -280,9 +329,9 @@ class WebSocketRpcClient:
                 return self
             except:
                 # Clean partly initiated state on error
-                if self.ws is not None:
+                if hasattr(self, "ws"):
                     await self.ws.close()
-                if self.channel is not None:
+                if hasattr(self, "channel"):
                     await self.channel.close()
                 self.cancel_tasks()
                 raise
@@ -359,9 +408,13 @@ class WebSocketRpcClient:
     async def wait_on_rpc_ready(self):
         received_response = None
         attempt_count = 0
-        while received_response is None and attempt_count < self.MAX_CONNECTION_ATTEMPTS:
+        while (
+            received_response is None and attempt_count < self.MAX_CONNECTION_ATTEMPTS
+        ):
             try:
-                received_response = await asyncio.wait_for(self.ping(), self.WAIT_FOR_INITIAL_CONNECTION)
+                received_response = await asyncio.wait_for(
+                    self.ping(), self.WAIT_FOR_INITIAL_CONNECTION
+                )
             except asyncio.exceptions.TimeoutError:
                 attempt_count += 1
 
@@ -379,7 +432,8 @@ class WebSocketRpcClient:
     def _start_keep_alive_task(self):
         if self._keep_alive_interval > 0:
             logger.debug(
-                f"Starting keep alive task interval='{self._keep_alive_interval}' seconds")
+                f"Starting keep alive task interval='{self._keep_alive_interval}' seconds"
+            )
             self._keep_alive_task = asyncio.create_task(self._keep_alive())
 
     async def wait_on_reader(self):
@@ -387,11 +441,18 @@ class WebSocketRpcClient:
         Join on the internal reader task
         """
         try:
+            if self._read_task is None:
+                raise asyncio.CancelledError()
             await self._read_task
         except asyncio.CancelledError:
             logger.info(f"RPC Reader task was cancelled.")
 
-    async def call(self, name, args={}, timeout=None):
+    async def call(
+        self,
+        name,
+        args: Dict[str, Any] = {},
+        timeout: float | Type[DEFAULT_TIMEOUT] | None = DEFAULT_TIMEOUT,
+    ) -> RpcResponse:
         """
         Call a method and wait for a response to be received
          Args:
@@ -402,7 +463,7 @@ class WebSocketRpcClient:
         return await self.channel.call(name, args, timeout=timeout)
 
     @property
-    def other(self):
+    def other(self) -> RpcCaller:
         """
         Proxy object to call methods on the other side
         """

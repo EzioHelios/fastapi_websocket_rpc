@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi_websocket_rpc import WebSocketFrameType
 from fastapi_websocket_rpc.logger import LoggingModes, logging_config, get_logger
 from fastapi_websocket_rpc.rpc_methods import RpcUtilityMethods
+from fastapi_websocket_rpc.schemas import RpcResponse
 from fastapi_websocket_rpc.simplewebsocket import SimpleWebSocket
 from fastapi_websocket_rpc.utils import pydantic_serialize
 from fastapi_websocket_rpc.websocket_rpc_client import WebSocketRpcClient
@@ -40,8 +41,8 @@ class BinarySerializingWebSocket(SimpleWebSocket):
     def _deserialize(self, buffer):
         return json.loads(buffer.decode())
 
-    async def send(self, msg):
-        await self._websocket.send(self._serialize(msg))
+    async def send(self, data):
+        await self._websocket.send(self._serialize(data))
 
     async def recv(self):
         msg = await self._websocket.recv()
@@ -87,8 +88,9 @@ async def test_echo(server):
         logger.debug("Initialized WebSocketRpcClient")
         text = "Hello World!"
         logger.debug("Waiting for response...")
-        response = await client.other.echo(text=text)
+        response = await client.other.get_method("echo")(text=text)
         logger.debug("Response: %s", str(response))
+        assert isinstance(response, RpcResponse)
         assert response.result == text
 
 
@@ -106,8 +108,9 @@ async def test_structured_response(server):
     ) as client:
         utils = RpcUtilityMethods()
         ourProcess = await utils.get_process_details()
-        response = await client.other.get_process_details()
+        response = await client.other.get_method("get_process_details")()
         # We got a valid process id
+        assert isinstance(response, RpcResponse)
         assert isinstance(response.result["pid"], int)
         # We have all the details form the other process
         assert "cmd" in response.result

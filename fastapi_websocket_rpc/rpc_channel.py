@@ -2,14 +2,16 @@
 Definition for an RPC channel protocol on top of a websocket - enabling bi-directional request/response interactions
 """
 import asyncio
-from inspect import _empty, getmembers, ismethod, signature
-from typing import Any, Dict, List
+from inspect import _empty, signature
+from typing import Any, Awaitable, Callable, Coroutine, Dict, Generic, List, Optional, Protocol, Type, cast
 
 from pydantic import ValidationError
 
+from fastapi_websocket_rpc.simplewebsocket import SerializerT
+
 from .logger import get_logger
-from .rpc_methods import EXPOSED_BUILT_IN_METHODS, NoResponse, RpcMethodsBase
-from .schemas import RpcMessage, RpcRequest, RpcResponse
+from .rpc_methods import BuiltInMethods, MethodsT, NoResponse, NoResponseType, RpcMethodsBase
+from .schemas import RpcError, RpcErrorResponse, RpcRequest, RpcResponse
 from .utils import gen_uid, pydantic_parse
 
 logger = get_logger("RPC_CHANNEL")
@@ -47,7 +49,7 @@ class RpcPromise:
 
     def __init__(self, request: RpcRequest):
         self._request = request
-        self._id = request.call_id
+        self._id = request.id
         # event used to wait for the completion of the request (upon receiving its matching response)
         self._event = asyncio.Event()
 
@@ -56,7 +58,7 @@ class RpcPromise:
         return self._request
 
     @property
-    def call_id(self):
+    def call_id(self) -> str | None:
         return self._id
 
     def set(self):
@@ -72,56 +74,42 @@ class RpcPromise:
         return self._event.wait()
 
 
-class RpcProxy:
-    """
-    Helper class
-    provide a __call__ interface for an RPC method over a given channel
-    """
-
-    def __init__(self, channel, method_name) -> None:
-        self.method_name = method_name
-        self.channel = channel
-
-    def __call__(self, **kwds: Any) -> Any:
-        return self.channel.call(self.method_name, args=kwds)
-
-
 class RpcCaller:
     """
     Helper class provide an object (aka other) with callable methods for each remote method on the otherside
     """
 
-    def __init__(self, channel, methods=None) -> None:
+    def __init__(self, channel: "RpcChannel", methods: RpcMethodsBase | None=None) -> None:
         self._channel = channel
-        self._method_names = (
-            [method[0] for method in getmembers(methods, lambda i: ismethod(i))]
-            if methods is not None
-            else None
-        )
+        self._methods = methods if methods is not None else self._channel.methods
 
-    def __getattribute__(self, name: str):
-        if (not name.startswith("_") or name in EXPOSED_BUILT_IN_METHODS) and (
-            self._method_names is None or name in self._method_names
-        ):
-            return RpcProxy(self._channel, name)
-        else:
-            return super().__getattribute__(name)
+    def get_method(self, name: str) -> Callable[..., Awaitable[RpcResponse | RpcErrorResponse]]:
+        return lambda *args, **kwargs: self._channel.call(name, args=dict(**kwargs))
+    
+    @property
+    def _ping_(self) -> Callable[..., Awaitable[RpcResponse | RpcErrorResponse]]:
+        return lambda : self._channel.call(BuiltInMethods.ping)
+    
+    @property
+    def _get_channel_id_(self) -> Callable[..., Awaitable[RpcResponse | RpcErrorResponse]]:
+        return lambda : self._channel.call(BuiltInMethods.get_channel_id)
 
 
 # Callback signatures
-async def OnConnectCallback(channel):
-    pass
+class OnConnectCallback(Protocol):
+    def __call__(self, channel: "RpcChannel") -> Awaitable:
+        ...
+
+class OnDisconnectCallback(Protocol):
+    def __call__(self, channel: "RpcChannel") -> Awaitable:
+        ...
+
+class OnErrorCallback(Protocol):
+    def __call__(self, channel: "RpcChannel", err: Exception) -> Awaitable:
+        ...
 
 
-async def OnDisconnectCallback(channel):
-    pass
-
-
-async def OnErrorCallback(channel, err: Exception):
-    pass
-
-
-class RpcChannel:
+class RpcChannel(Generic[MethodsT, SerializerT]):
     """
     A wire agnostic json-rpc channel protocol for both server and client.
     Enable each side to send RPC-requests (calling exposed methods on other side) and receive rpc-responses with the return value
@@ -132,10 +120,10 @@ class RpcChannel:
 
     def __init__(
         self,
-        methods: RpcMethodsBase,
-        socket,
+        methods: MethodsT,
+        socket: SerializerT,
         channel_id=None,
-        default_response_timeout=None,
+        default_response_timeout: float | None=None,
         sync_channel_id=False,
         **kwargs,
     ):
@@ -153,9 +141,9 @@ class RpcChannel:
         # allow methods to access channel (for recursive calls - e.g. call me as a response for me calling you)
         self.methods._set_channel_(self)
         # Pending requests - id-mapped to async-event
-        self.requests: Dict[str, asyncio.Event] = {}
+        self.requests: Dict[str | None, RpcPromise] = {}
         # Received responses
-        self.responses = {}
+        self.responses: Dict[str | None, RpcResponse | RpcErrorResponse] = {}
         self.socket = socket
         # timeout
         self.default_response_timeout = default_response_timeout
@@ -185,7 +173,7 @@ class RpcChannel:
     def context(self) -> Dict[str, Any]:
         return self._context
 
-    async def get_other_channel_id(self) -> str:
+    async def get_other_channel_id(self) -> str | None:
         """
         Method to get the channel id of the other side of the channel
         The _channel_id_synced verify we have it
@@ -236,20 +224,38 @@ class RpcChannel:
         Handle an incoming RPC message
         This is the main function servers/clients using the channel need to call (upon reading a message on the wire)
         """
+        logger.info("Message received: {data}")
+        error = None
         try:
-            message = pydantic_parse(RpcMessage, data)
-            if message.request is not None:
-                await self.on_request(message.request)
-            if message.response is not None:
-                await self.on_response(message.response)
+            request = pydantic_parse(RpcRequest, data)
+            await self.on_request(request)
+            return
         except ValidationError as e:
-            logger.error(f"Failed to parse message", {"message": data, "error": e})
-            await self.on_error(e)
-        except Exception as e:
-            await self.on_error(e)
-            raise
+            error = e
+        try:
+            response = pydantic_parse(RpcResponse, data)
+            await self.on_response(response)
+            return
+        except ValidationError as e:
+            pass
+        try:
+            response = pydantic_parse(RpcErrorResponse, data)
+            await self.on_response(response)
+            return
+        except ValidationError as e:
+            pass
+        logger.error(f"Invalid message received: {data}")
+        response=RpcErrorResponse(
+            id="-1",
+            error=RpcError(
+                code=-32700,
+                message="Parse error",
+                data=error.errors(),
+            ),
+        )
+        await self.send(response)
 
-    def register_connect_handler(self, coros: List[OnConnectCallback] = None):
+    def register_connect_handler(self, coros: List[OnConnectCallback] | None = None):
         """
         Register a connection handler callback that will be called (As an async task)) with the channel
         Args:
@@ -258,7 +264,7 @@ class RpcChannel:
         if coros is not None:
             self._connect_handlers.extend(coros)
 
-    def register_disconnect_handler(self, coros: List[OnDisconnectCallback] = None):
+    def register_disconnect_handler(self, coros: List[OnDisconnectCallback] | None = None):
         """
         Register a disconnect handler callback that will be called (As an async task)) with the channel id
         Args:
@@ -267,7 +273,7 @@ class RpcChannel:
         if coros is not None:
             self._disconnect_handlers.extend(coros)
 
-    def register_error_handler(self, coros: List[OnErrorCallback] = None):
+    def register_error_handler(self, coros: List[OnErrorCallback] | None = None):
         """
         Register an error handler callback that will be called (As an async task)) with the channel and triggered error.
         Args:
@@ -297,6 +303,8 @@ class RpcChannel:
         """
         if self._other_channel_id is None:
             other_channel_id = await self.other._get_channel_id_()
+            if not isinstance(other_channel_id, RpcResponse):
+                raise RemoteValueError()
             self._other_channel_id = (
                 other_channel_id.result
                 if other_channel_id and other_channel_id.result
@@ -310,15 +318,15 @@ class RpcChannel:
         else:
             return self._other_channel_id
 
-    async def on_disconnect(self):
+    async def on_disconnect(self) -> None:
         # disconnect happened - mark the channel as closed
         self._closed.set()
         await self.on_handler_event(self._disconnect_handlers, self)
 
-    async def on_error(self, error: Exception):
+    async def on_error(self, error: Exception) -> None:
         await self.on_handler_event(self._error_handlers, self, error)
 
-    async def on_request(self, message: RpcRequest):
+    async def on_request(self, request: RpcRequest) -> None:
         """
         Handle incoming RPC requests - calling relevant exposed method
         Note: methods prefixed with "_" are protected and ignored.
@@ -328,46 +336,68 @@ class RpcChannel:
         """
         # TODO add exception support (catch exceptions and pass to other side as response with errors)
         logger.debug(
-            "Handling RPC request - %s", {"request": message, "channel": self.id}
+            "Handling RPC request - %s", {"request": request, "channel": self.id}
         )
-        method_name = message.method
         # Ignore "_" prefixed methods (except the built in "_ping_")
-        if isinstance(method_name, str) and (
-            not method_name.startswith("_") or method_name in EXPOSED_BUILT_IN_METHODS
-        ):
-            method = getattr(self.methods, method_name)
-            if callable(method):
-                result = await method(**message.arguments)
-                if result is not NoResponse:
-                    # get indicated type
-                    result_type = self.get_return_type(method)
-                    # if no type given - try to convert to string
-                    if result_type is str and type(result) is not str:
-                        result = str(result)
-                    response = RpcMessage(
-                        response=RpcResponse[result_type](
-                            call_id=message.call_id,
-                            result=result,
-                            result_type=getattr(
-                                result_type,
-                                "__name__",
-                                getattr(result_type, "_name", "unknown-type"),
-                            ),
-                        )
-                    )
-                    await self.send(response)
+        method = self.methods.get_method(request.method)
+        if callable(method):
+            try:
+                arguments = request.params if request.params is not None else {}
+                result = await method(self.methods, **arguments)
+                if isinstance(result, NoResponseType):
+                    return
+                # get indicated type
+                result_type = self.get_return_type(method)
+                # if no type given - try to convert to string
+                if result_type is str and type(result) is not str:
+                    result = str(result)
+                response = RpcResponse[result_type](
+                    id=request.id,
+                    result=result,
+                )
+            except ValidationError as e:
+                response = RpcErrorResponse(
+                    id=request.id,
+                    error=RpcError(
+                        code=-32602,
+                        message="Invalid params",
+                        data=e.errors()
+                    ),
+                )
+            except Exception as e:
+                response = RpcErrorResponse(
+                    id=request.id,
+                    error=RpcError(
+                        code=500,
+                        message=str(e),
+                    ),
+                )
+        else:
+            logger.error(
+                "Method not found - %s",
+                {"method": request.method, "channel": self.id},
+            )
+            response=RpcErrorResponse(
+                id=request.id,
+                error=RpcError(
+                    code=404,
+                    message=f"Method not found",
+                    data=request.method,
+                ),
+            )
+        await self.send(response)
 
-    def get_saved_promise(self, call_id):
+    def get_saved_promise(self, call_id: str | None) -> RpcPromise:
         return self.requests[call_id]
 
-    def get_saved_response(self, call_id):
+    def get_saved_response(self, call_id: str | None) -> RpcResponse | RpcErrorResponse:
         return self.responses[call_id]
 
-    def clear_saved_call(self, call_id):
+    def clear_saved_call(self, call_id: str | None) -> None:
         del self.requests[call_id]
         del self.responses[call_id]
 
-    async def on_response(self, response: RpcResponse):
+    async def on_response(self, response: RpcResponse | RpcErrorResponse) -> None:
         """
         Handle an incoming response to a previous RPC call
 
@@ -375,12 +405,12 @@ class RpcChannel:
             response (RpcResponse): the received response
         """
         logger.debug("Handling RPC response - %s", {"response": response})
-        if response.call_id is not None and response.call_id in self.requests:
-            self.responses[response.call_id] = response
-            promise = self.requests[response.call_id]
+        if response.id is not None and response.id in self.requests:
+            self.responses[response.id] = response
+            promise = self.requests[response.id]
             promise.set()
 
-    async def wait_for_response(self, promise, timeout=DEFAULT_TIMEOUT) -> RpcResponse:
+    async def wait_for_response(self, promise: RpcPromise, timeout: Type[DEFAULT_TIMEOUT] | float | None=DEFAULT_TIMEOUT) -> RpcResponse | RpcErrorResponse:
         """
         Wait on a previously made call
         Args:
@@ -394,14 +424,16 @@ class RpcChannel:
             RpcChannelClosedException - if the channel fails before wait could be completed
         """
         if timeout is DEFAULT_TIMEOUT:
-            timeout = self.default_response_timeout
+            _timeout = self.default_response_timeout
+        else:
+            _timeout = cast(Optional[float], timeout)
         # wait for the promise or until the channel is terminated
         _, pending = await asyncio.wait(
             [
                 asyncio.ensure_future(promise.wait()),
                 asyncio.ensure_future(self._closed.wait()),
             ],
-            timeout=timeout,
+            timeout=_timeout,
             return_when=asyncio.FIRST_COMPLETED,
         )
         # Cancel all pending futures and then detect if close was the first done
@@ -409,14 +441,14 @@ class RpcChannel:
             fut.cancel()
         response = self.responses.get(promise.call_id, NoResponse)
         # if the channel was closed before we could finish
-        if response is NoResponse:
+        if isinstance(response, NoResponseType):
             raise RpcChannelClosedException(
                 f"Channel Closed before RPC response for {promise.call_id} could be received"
             )
         self.clear_saved_call(promise.call_id)
         return response
 
-    async def async_call(self, name, args={}, call_id=None) -> RpcPromise:
+    async def async_call(self, name: str, args: Dict[str, Any]={}, call_id: str | None=None) -> RpcPromise:
         """
         Call a method and return the event and the sent message (including the chosen call_id)
         use self.wait_for_response on the event and call_id to get the return value of the call
@@ -426,15 +458,13 @@ class RpcChannel:
             call_id (string, optional): a UUID to use to track the call () - override only with true UUIDs
         """
         call_id = call_id or gen_uid()
-        msg = RpcMessage(
-            request=RpcRequest(method=name, arguments=args, call_id=call_id)
-        )
-        logger.debug("Calling RPC method - %s", {"message": msg})
-        await self.send(msg)
-        promise = self.requests[msg.request.call_id] = RpcPromise(msg.request)
+        request = RpcRequest(method=name, params=args, id=call_id)
+        logger.debug("Calling RPC method - %s", {"message": request})
+        await self.send(request)
+        promise = self.requests[call_id] = RpcPromise(request)
         return promise
 
-    async def call(self, name, args={}, timeout=DEFAULT_TIMEOUT):
+    async def call(self, name: str, args: Dict[str, Any]={}, timeout: float | Type[DEFAULT_TIMEOUT] | None=DEFAULT_TIMEOUT):
         """
         Call a method and wait for a response to be received
         """

@@ -11,7 +11,7 @@ logger.logging_config.set_mode(logger.LoggingModes.UVICORN, logger.logging.DEBUG
 class ConcatServer(RpcMethodsBase):
     async def concat(self, a="", b=""):
         # allow client to exit after some time after
-        asyncio.create_task(self.channel.other.allow_exit(delay=random.randint(1,4)))
+        asyncio.create_task(self.channel.other.get_method("allow_exit")(delay=random.randint(1,4)))
         # return calculated response
         return a + b
 

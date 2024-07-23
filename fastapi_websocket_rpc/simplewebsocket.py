@@ -1,5 +1,6 @@
 import json
 from abc import ABC, abstractmethod
+from typing import Awaitable, TypeVar
 
 from .utils import pydantic_serialize
 
@@ -8,23 +9,25 @@ class SimpleWebSocket(ABC):
     """
     Abstract base class for all websocket related wrappers.
     """
+    def __init__(self, *args, **kwargs):
+        ...
 
     @abstractmethod
-    def connect(self, uri: str, **connect_kwargs):
-        pass
+    def connect(self, uri: str, **connect_kwargs) -> Awaitable:
+        ...
 
     @abstractmethod
-    def send(self, msg):
-        pass
+    def send(self, data) -> Awaitable:
+        ...
 
     # If return None, then it means Connection is closed, and we stop receiving and close.
     @abstractmethod
-    def recv(self):
-        pass
+    def recv(self) -> Awaitable:
+        ...
 
     @abstractmethod
-    def close(self, code: int = 1000):
-        pass
+    def close(self, code: int = 1000) -> Awaitable:
+        ...
 
 
 class JsonSerializingWebSocket(SimpleWebSocket):
@@ -40,8 +43,8 @@ class JsonSerializingWebSocket(SimpleWebSocket):
     def _deserialize(self, buffer):
         return json.loads(buffer)
 
-    async def send(self, msg):
-        await self._websocket.send(self._serialize(msg))
+    async def send(self, data):
+        await self._websocket.send(self._serialize(data))
 
     async def recv(self):
         msg = await self._websocket.recv()
@@ -52,3 +55,6 @@ class JsonSerializingWebSocket(SimpleWebSocket):
     async def close(self, code: int = 1000):
         await self._websocket.close(code)
 
+
+SerializerT = TypeVar("SerializerT", bound=SimpleWebSocket)
+ClientT = TypeVar("ClientT", bound=SimpleWebSocket)

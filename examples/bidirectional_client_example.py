@@ -4,7 +4,7 @@ builds on top of the simple example and adds- calls from the server to the clien
 """
 import asyncio
 from os import wait
-from fastapi_websocket_rpc import RpcMethodsBase, WebSocketRpcClient, logger
+from fastapi_websocket_rpc import RpcMethodsBase, WebSocketRpcClient, logger, rpc_call
 # set fastapi-websocket-rpc logging to DEBUG
 logger.logging_config.set_mode(logger.LoggingModes.UVICORN, logger.logging.DEBUG)
 
@@ -25,6 +25,7 @@ class WaitingClient(RpcMethodsBase):
         self.can_send_queries.set()
         return None
     
+    @rpc_call("allow_exit")
     async def allow_exit(self, delay):
         async def allow():
             await asyncio.sleep(delay)
@@ -37,9 +38,9 @@ async def run_client(uri):
         # wait for the server to allow us to send questions
         await client.channel.methods.can_send_queries.wait()
         # call concat on the other side
-        response = await client.other.concat(a="hello", b=" world")
+        response = await client.other.get_method("concat")(a="hello", b=" world")
         # print result
-        print(response.result)  # will print "hello world"
+        print(response)  # will print "hello world"
         # wait for the server to tell us we can exit
         await client.channel.methods.can_exit.wait()
 

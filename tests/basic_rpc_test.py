@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from fastapi_websocket_rpc.rpc_methods import RpcUtilityMethods
 from fastapi_websocket_rpc.logger import logging_config, LoggingModes, get_logger
+from fastapi_websocket_rpc.schemas import RpcResponse
 from fastapi_websocket_rpc.websocket_rpc_client import WebSocketRpcClient
 from fastapi_websocket_rpc.websocket_rpc_endpoint import WebsocketRPCEndpoint
 from fastapi_websocket_rpc.utils import gen_uid
@@ -45,7 +46,8 @@ async def test_echo(server):
     """
     async with WebSocketRpcClient(uri, RpcUtilityMethods(), default_response_timeout=4) as client:
         text = "Hello World!"
-        response = await client.other.echo(text=text)
+        response = await client.other.get_method("echo")(text=text)
+        assert isinstance(response, RpcResponse)
         assert response.result == text
 
 
@@ -72,7 +74,7 @@ async def test_other_channel_id(server):
     async with WebSocketRpcClient(uri, RpcUtilityMethods(), default_response_timeout=4) as client:
         try:
             response = await client.other._get_channel_id_()
-            assert response.result_type == 'str'
+            assert isinstance(response, RpcResponse)
             passed = True
         except Exception as e:
             logging.exception("_get_channel_id test failed")
@@ -87,7 +89,8 @@ async def test_keep_alive(server):
     """
     async with WebSocketRpcClient(uri, RpcUtilityMethods(), default_response_timeout=4, keep_alive=0.1) as client:
         text = "Hello World!"
-        response = await client.other.echo(text=text)
+        response = await client.other.get_method("echo")(text=text)
+        assert isinstance(response, RpcResponse)
         assert response.result == text
         await asyncio.sleep(0.6)
 
@@ -101,7 +104,8 @@ async def test_structured_response(server):
     async with WebSocketRpcClient(uri, RpcUtilityMethods(), default_response_timeout=4) as client:
         utils = RpcUtilityMethods()
         ourProcess = await utils.get_process_details()
-        response = await client.other.get_process_details()
+        response = await client.other.get_method("get_process_details")()
+        assert isinstance(response, RpcResponse)
         # We got a valid process id
         assert isinstance(response.result["pid"], int)
         # We have all the details form the other process

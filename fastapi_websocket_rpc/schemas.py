@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, Generic, Optional, TypeVar
+from typing import Any, Dict, Generic, Literal, Optional, TypeVar
 
 from pydantic import BaseModel
 
@@ -9,9 +9,10 @@ UUID = str
 
 
 class RpcRequest(BaseModel):
+    jsonrpc: Literal["2.0"] = "2.0"
+    id: Optional[UUID] = None
     method: str
-    arguments: Optional[Dict] = {}
-    call_id: Optional[UUID] = None
+    params: Optional[Dict] = {}
 
 
 ResponseT = TypeVar("ResponseT")
@@ -22,21 +23,29 @@ if is_pydantic_pre_v2():
     from pydantic.generics import GenericModel
 
     class RpcResponse(GenericModel, Generic[ResponseT]):
+        jsonrpc: Literal["2.0"] = "2.0"
+        id: Optional[UUID] = None
         result: ResponseT
-        result_type: Optional[str]
-        call_id: Optional[UUID] = None
 
 else:
 
     class RpcResponse(BaseModel, Generic[ResponseT]):
+        jsonrpc: Literal["2.0"] = "2.0"
+        id: Optional[UUID] = None
         result: ResponseT
-        result_type: Optional[str]
-        call_id: Optional[UUID] = None
 
 
-class RpcMessage(BaseModel):
-    request: Optional[RpcRequest] = None
-    response: Optional[RpcResponse] = None
+class RpcError(BaseModel):
+    jsonrpc: Literal["2.0"] = "2.0"
+    code: int
+    message: str
+    data: Optional[Any] = None
+
+
+class RpcErrorResponse(BaseModel):
+    jsonrpc: str = "2.0"
+    id: Optional[UUID] = None
+    error: Optional[RpcError]
 
 
 class WebSocketFrameType(str, Enum):

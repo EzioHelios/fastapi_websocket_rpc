@@ -1,8 +1,9 @@
 import time
+from fastapi_websocket_rpc.schemas import RpcResponse
 from fastapi_websocket_rpc.utils import gen_uid
 from fastapi_websocket_rpc.websocket_rpc_endpoint import WebsocketRPCEndpoint
 from fastapi_websocket_rpc.websocket_rpc_client import WebSocketRpcClient
-from fastapi_websocket_rpc.rpc_methods import RpcMethodsBase
+from fastapi_websocket_rpc.rpc_methods import RpcMethodsBase, rpc_call
 from fastapi import (APIRouter, FastAPI,
                      WebSocket)
 import uvicorn
@@ -22,9 +23,11 @@ uri = f"ws://localhost:{PORT}/ws/{CLIENT_ID}"
 
 class RpcCalculator(RpcMethodsBase):
 
+    @rpc_call("add")
     async def add(self, a: float, b: float) -> float:
         return a + b
 
+    @rpc_call("multiply")
     async def multiply(self, a: float, b: float) -> float:
         return a * b
 
@@ -65,7 +68,9 @@ async def test_custom_server_methods(server):
         import random
         a = random.random()
         b = random.random()
-        response = await client.other.add(a=a, b=b)
+        response = await client.other.get_method("add")(a=a, b=b)
+        assert isinstance(response, RpcResponse)
         assert response.result == a+b
-        response = await client.other.multiply(a=a, b=b)
+        response = await client.other.get_method("multiply")(a=a, b=b)
+        assert isinstance(response, RpcResponse)
         assert response.result == a*b

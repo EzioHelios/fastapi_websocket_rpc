@@ -1,9 +1,9 @@
 import asyncio
-from typing import Coroutine, List, Type
-from fastapi import WebSocket, WebSocketDisconnect
+from typing import List, Type
+from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 
 from .connection_manager import ConnectionManager
-from .rpc_channel import RpcChannel
+from .rpc_channel import OnConnectCallback, OnDisconnectCallback, RpcChannel
 from .rpc_methods import RpcMethodsBase
 from .logger import get_logger
 from .schemas import WebSocketFrameType
@@ -20,24 +20,22 @@ class WebSocketSimplifier(SimpleWebSocket):
     def __init__(self, websocket: WebSocket, frame_type: WebSocketFrameType = WebSocketFrameType.Text):
         self.websocket = websocket
         self.frame_type = frame_type
+        if self.frame_type == WebSocketFrameType.Binary:
+            self.send = self.websocket.send_bytes
+            self.recv = self.websocket.receive_bytes
+        else:
+            self.send = self.websocket.send_text
+            self.recv = self.websocket.receive_text
 
     # This method is only useful on websocket_rpc_client. Here on endpoint file, it has nothing to connect to.
     async def connect(self, uri: str, **connect_kwargs):
         pass
 
-    @property
-    def send(self):
-        if self.frame_type == WebSocketFrameType.Binary:
-            return self.websocket.send_bytes
-        else:
-            return self.websocket.send_text
+    async def send(self, data) -> None:
+        ...
 
-    @property
-    def recv(self):
-        if self.frame_type == WebSocketFrameType.Binary:
-            return self.websocket.receive_bytes
-        else:
-            return self.websocket.receive_text
+    async def recv(self) -> str | bytes:
+        ...
 
     async def close(self, code: int = 1000):
         return await self.websocket.close(code)
@@ -48,10 +46,10 @@ class WebsocketRPCEndpoint:
     A websocket RPC sever endpoint, exposing RPC methods
     """
 
-    def __init__(self, methods: RpcMethodsBase = None,
-                 manager: ConnectionManager = None,
-                 on_disconnect: List[Coroutine] = None,
-                 on_connect: List[Coroutine] = None,
+    def __init__(self, methods: RpcMethodsBase | None = None,
+                 manager: ConnectionManager | None= None,
+                 on_disconnect: List[OnDisconnectCallback] | None= None,
+                 on_connect: List[OnConnectCallback] | None= None,
                  frame_type: WebSocketFrameType = WebSocketFrameType.Text,
                  serializing_socket_cls: Type[SimpleWebSocket] = JsonSerializingWebSocket,
                  rpc_channel_get_remote_id: bool = False):
@@ -72,7 +70,7 @@ class WebsocketRPCEndpoint:
         self._serializing_socket_cls = serializing_socket_cls
         self._rpc_channel_get_remote_id = rpc_channel_get_remote_id
 
-    async def main_loop(self, websocket: WebSocket, client_id: str = None, **kwargs):
+    async def main_loop(self, websocket: WebSocket, client_id: str | None = None, **kwargs):
         try:
             await self.manager.connect(websocket)
             logger.info(f"Client connected", {
@@ -92,30 +90,30 @@ class WebsocketRPCEndpoint:
                     await channel.on_message(data)
             except WebSocketDisconnect:
                 logger.info(
-                    f"Client disconnected - {websocket.client.port} :: {channel.id}")
+                    f"Client disconnected - {websocket.client.port} :: {channel.id}") # type: ignore
                 await self.handle_disconnect(websocket, channel)
             except:
                 # cover cases like - RuntimeError('Cannot call "send" once a close message has been sent.')
                 logger.info(
-                    f"Client connection failed - {websocket.client.port} :: {channel.id}")
+                    f"Client connection failed - {websocket.client.port} :: {channel.id}") # type: ignore
                 await self.handle_disconnect(websocket, channel)
         except:
-            logger.exception(f"Failed to serve - {websocket.client.port}")
+            logger.exception(f"Failed to serve - {websocket.client.port}") # type: ignore
             self.manager.disconnect(websocket)
 
-    async def handle_disconnect(self, websocket, channel):
+    async def handle_disconnect(self, websocket: WebSocket, channel: RpcChannel):
         self.manager.disconnect(websocket)
         await channel.on_disconnect()
 
-    async def on_connect(self, channel, websocket):
+    async def on_connect(self, channel: RpcChannel, websocket: WebSocket) -> None:
         """
         Called upon new client connection
         """
         # Trigger connect callback if available
         if (self._on_connect is not None):
-            asyncio.create_task(self._on_connect(channel, websocket))
+            asyncio.gather(*[cb(channel) for cb in self._on_connect])
 
-    def register_route(self, router, path="/ws"):
+    def register_route(self, router: FastAPI | APIRouter, path="/ws"):
         """
         Register this endpoint as a default websocket route on the given router
         Args:

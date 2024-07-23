@@ -11,6 +11,7 @@ from fastapi import (APIRouter, Depends, FastAPI, Header, HTTPException,
                      WebSocket)
 
 from fastapi_websocket_rpc.rpc_methods import RpcUtilityMethods
+from fastapi_websocket_rpc.schemas import RpcResponse
 from fastapi_websocket_rpc.websocket_rpc_client import WebSocketRpcClient
 from fastapi_websocket_rpc.websocket_rpc_endpoint import WebsocketRPCEndpoint
 from fastapi_websocket_rpc.utils import gen_uid
@@ -58,10 +59,12 @@ async def test_recursive_rpc_calls(server):
         utils = RpcUtilityMethods()
         ourProcess = await utils.get_process_details()
         # we call the server's call_me_back, asking him to call our echo method
-        remote_promise = await client.other.call_me_back(method_name="echo", args={"text": text})
+        remote_promise = await client.other.get_method("call_me_back")(method_name="echo", args={"text": text})
+        assert isinstance(remote_promise, RpcResponse)
         # give the server a chance to call us
         await asyncio.sleep(1)
         # go back to the server to get our own response from it
-        response = await client.other.get_response(call_id=remote_promise.result)
+        response = await client.other.get_method("get_response")(call_id=remote_promise.result)
         # check the response we sent
+        assert isinstance(response, RpcResponse)
         assert response.result['result'] == text

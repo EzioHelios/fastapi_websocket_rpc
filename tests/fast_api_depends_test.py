@@ -10,6 +10,7 @@ import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, Header, WebSocket
 
 from fastapi_websocket_rpc.rpc_methods import RpcUtilityMethods
+from fastapi_websocket_rpc.schemas import RpcResponse
 from fastapi_websocket_rpc.utils import gen_uid
 from fastapi_websocket_rpc.websocket_rpc_client import WebSocketRpcClient
 from fastapi_websocket_rpc.websocket_rpc_endpoint import WebsocketRPCEndpoint
@@ -56,7 +57,8 @@ async def test_valid_token(server):
     """
     async with WebSocketRpcClient(uri, RpcUtilityMethods(), default_response_timeout=4, extra_headers=[("X-TOKEN", SECRET_TOKEN)]) as client:
         text = "Hello World!"
-        response = await client.other.echo(text=text)
+        response = await client.other.get_method("echo")(text=text)
+        assert isinstance(response, RpcResponse)
         assert response.result == text
 
 

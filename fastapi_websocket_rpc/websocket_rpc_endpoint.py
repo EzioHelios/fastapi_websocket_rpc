@@ -86,41 +86,44 @@ class WebsocketRPCEndpoint:
             await channel.on_connect()
             try:
                 while True:
-                    data = await simple_websocket.recv()
-                    await channel.on_message(data)
+                    try:
+                        data = await simple_websocket.recv()
+                        await channel.on_message(data)
+                    except SerializationError as e:
+                        logger.exception(e)
+                        logger.info(f"Client messege failed - {websocket.client.port} :: {channel.id}") # type: ignore
+                        await channel.send(
+                            RpcErrorResponse(
+                                id="-1",
+                                error=RpcError(
+                                    code=error_code.INTERNAL_ERROR,
+                                    message="Internal error - Failed to deserialize server message.",
+                                )
+                            )
+                        )
+                    except DeserializationError as e:
+                        logger.exception(e)
+                        logger.info(f"Server messege failed - {websocket.client.port} :: {channel.id}") # type: ignore
+                        await channel.send(
+                            RpcErrorResponse(
+                                id="-1",
+                                error=RpcError(
+                                    code=error_code.PARSE_ERROR,
+                                    message="Parse error - Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.",
+                                )
+                            )
+                        )
             except WebSocketDisconnect:
                 logger.info(
                     f"Client disconnected - {websocket.client.port} :: {channel.id}") # type: ignore
                 await self.handle_disconnect(websocket, channel)
-            except SerializationError as e:
-                logger.exception(e)
-                await channel.send(
-                    RpcErrorResponse(
-                        id="-1",
-                        error=RpcError(
-                            code=error_code.INTERNAL_ERROR,
-                            message="Internal error - Failed to deserialize server message.",
-                        )
-                    )
-                )
-                logger.info(f"Server messege failed - {websocket.client.port} :: {channel.id}") # type: ignore
-            except DeserializationError as e:
-                logger.exception(e)
-                await channel.send(
-                    RpcErrorResponse(
-                        id="-1",
-                        error=RpcError(
-                            code=error_code.PARSE_ERROR,
-                            message="Parse error - Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.",
-                        )
-                    )
-                )
-                logger.info(f"Client messege failed - {websocket.client.port} :: {channel.id}") # type: ignore
             except Exception as e:
+                # unknown exception - TODO: is it neccesary to force close client?
                 logger.exception(e)
                 # cover cases like - RuntimeError('Cannot call "send" once a close message has been sent.')
                 logger.info(
                     f"Client connection failed - {websocket.client.port} :: {channel.id}") # type: ignore
+                await channel.close()
                 await self.handle_disconnect(websocket, channel)
         except:
             logger.exception(f"Failed to serve - {websocket.client.port}") # type: ignore

@@ -39,7 +39,7 @@ class RpcCall:
 
         return RpcCall._instance
 
-    def __call__(self, method_name: str | None) -> typing.Callable[[DecoratedCallable], DecoratedCallable]:
+    def __call__(self, method_name: str | None = None) -> typing.Callable[[DecoratedCallable], DecoratedCallable]:
 
         def decorator(func: DecoratedCallable) -> DecoratedCallable:
             nonlocal method_name

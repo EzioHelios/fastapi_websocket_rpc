@@ -5,6 +5,18 @@ from typing import Awaitable, TypeVar
 from .utils import pydantic_serialize
 
 
+class SerializationError(Exception):
+    """
+    Raised when serialization fails.
+    """
+
+
+class DeserializationError(Exception):
+    """
+    Raised when deserialization fails.
+    """
+
+
 class SimpleWebSocket(ABC):
     """
     Abstract base class for all websocket related wrappers.
@@ -38,10 +50,16 @@ class JsonSerializingWebSocket(SimpleWebSocket):
         await self._websocket.connect(uri, **connect_kwargs)
 
     def _serialize(self, msg):
-        return pydantic_serialize(msg)
+        try:
+            return pydantic_serialize(msg)
+        except Exception as e:
+            raise SerializationError(e.args)
 
     def _deserialize(self, buffer):
-        return json.loads(buffer)
+        try:
+            return json.loads(buffer)
+        except Exception as e:
+            raise DeserializationError(e.args)
 
     async def send(self, data):
         await self._websocket.send(self._serialize(data))

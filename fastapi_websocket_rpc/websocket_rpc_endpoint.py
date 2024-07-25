@@ -6,8 +6,8 @@ from .connection_manager import ConnectionManager
 from .rpc_channel import OnConnectCallback, OnDisconnectCallback, RpcChannel
 from .rpc_methods import RpcMethodsBase
 from .logger import get_logger
-from .schemas import WebSocketFrameType
-from .simplewebsocket import SimpleWebSocket, JsonSerializingWebSocket
+from .schemas import RpcError, RpcErrorResponse, WebSocketFrameType, error_code
+from .simplewebsocket import DeserializationError, SerializationError, SimpleWebSocket, JsonSerializingWebSocket
 
 logger = get_logger("RPC_ENDPOINT")
 
@@ -92,6 +92,30 @@ class WebsocketRPCEndpoint:
                 logger.info(
                     f"Client disconnected - {websocket.client.port} :: {channel.id}") # type: ignore
                 await self.handle_disconnect(websocket, channel)
+            except SerializationError as e:
+                logger.exception(e)
+                await channel.send(
+                    RpcErrorResponse(
+                        id="-1",
+                        error=RpcError(
+                            code=error_code.INTERNAL_ERROR,
+                            message="Internal error - Failed to deserialize server message.",
+                        )
+                    )
+                )
+                logger.info(f"Server messege failed - {websocket.client.port} :: {channel.id}") # type: ignore
+            except DeserializationError as e:
+                logger.exception(e)
+                await channel.send(
+                    RpcErrorResponse(
+                        id="-1",
+                        error=RpcError(
+                            code=error_code.PARSE_ERROR,
+                            message="Parse error - Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.",
+                        )
+                    )
+                )
+                logger.info(f"Client messege failed - {websocket.client.port} :: {channel.id}") # type: ignore
             except Exception as e:
                 logger.exception(e)
                 # cover cases like - RuntimeError('Cannot call "send" once a close message has been sent.')
@@ -103,6 +127,7 @@ class WebsocketRPCEndpoint:
             self.manager.disconnect(websocket)
 
     async def handle_disconnect(self, websocket: WebSocket, channel: RpcChannel):
+        await websocket.close()
         self.manager.disconnect(websocket)
         await channel.on_disconnect()
 

@@ -8,6 +8,14 @@ from .utils import is_pydantic_pre_v2
 UUID = str
 
 
+class error_code(int, Enum):
+    INVALID_REQUEST = -32600
+    METHOD_NOT_FOUND = -32601
+    INVALID_PARAMS = -32602
+    INTERNAL_ERROR = -32603
+    PARSE_ERROR = -32700
+
+
 class RpcRequest(BaseModel):
     jsonrpc: Literal["2.0"] = "2.0"
     id: Optional[UUID] = None

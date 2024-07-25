@@ -3,6 +3,7 @@ Definition for an RPC channel protocol on top of a websocket - enabling bi-direc
 """
 import asyncio
 from inspect import _empty, signature
+import json
 from typing import Any, Awaitable, Callable, Coroutine, Dict, Generic, List, Optional, Protocol, Type, cast
 
 from pydantic import ValidationError
@@ -11,7 +12,7 @@ from fastapi_websocket_rpc.simplewebsocket import SerializerT
 
 from .logger import get_logger
 from .rpc_methods import BuiltInMethods, MethodsT, NoResponse, NoResponseType, RpcMethodsBase
-from .schemas import RpcError, RpcErrorResponse, RpcRequest, RpcResponse
+from .schemas import RpcError, RpcErrorResponse, RpcRequest, RpcResponse, error_code
 from .utils import gen_uid, pydantic_parse
 
 logger = get_logger("RPC_CHANNEL")
@@ -248,9 +249,9 @@ class RpcChannel(Generic[MethodsT, SerializerT]):
         response=RpcErrorResponse(
             id="-1",
             error=RpcError(
-                code=-32700,
-                message="Parse error",
-                data=error.errors(),
+                code=error_code.INVALID_REQUEST,
+                message="Invalid Request - The JSON sent is not a valid Request object.",
+                data=json.loads(error.json()),
             ),
         )
         await self.send(response)
@@ -359,8 +360,8 @@ class RpcChannel(Generic[MethodsT, SerializerT]):
                 response = RpcErrorResponse(
                     id=request.id,
                     error=RpcError(
-                        code=-32602,
-                        message="Invalid params",
+                        code=error_code.INVALID_PARAMS,
+                        message=f"Invalid params - {request.params}.",
                         data=e.errors()
                     ),
                 )
@@ -368,7 +369,7 @@ class RpcChannel(Generic[MethodsT, SerializerT]):
                 response = RpcErrorResponse(
                     id=request.id,
                     error=RpcError(
-                        code=500,
+                        code=error_code.INTERNAL_ERROR,
                         message=str(e),
                     ),
                 )
@@ -380,8 +381,8 @@ class RpcChannel(Generic[MethodsT, SerializerT]):
             response=RpcErrorResponse(
                 id=request.id,
                 error=RpcError(
-                    code=404,
-                    message=f"Method not found",
+                    code=error_code.METHOD_NOT_FOUND,
+                    message=f"Method not found - {request.method}.",
                     data=request.method,
                 ),
             )

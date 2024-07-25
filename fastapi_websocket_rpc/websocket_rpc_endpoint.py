@@ -92,7 +92,8 @@ class WebsocketRPCEndpoint:
                 logger.info(
                     f"Client disconnected - {websocket.client.port} :: {channel.id}") # type: ignore
                 await self.handle_disconnect(websocket, channel)
-            except:
+            except Exception as e:
+                logger.exception(e)
                 # cover cases like - RuntimeError('Cannot call "send" once a close message has been sent.')
                 logger.info(
                     f"Client connection failed - {websocket.client.port} :: {channel.id}") # type: ignore

@@ -362,7 +362,7 @@ class RpcChannel(Generic[MethodsT, SerializerT]):
                     error=RpcError(
                         code=error_code.INVALID_PARAMS,
                         message=f"Invalid params - {request.params}.",
-                        data=e.errors()
+                        data=e.json()
                     ),
                 )
             except Exception as e:

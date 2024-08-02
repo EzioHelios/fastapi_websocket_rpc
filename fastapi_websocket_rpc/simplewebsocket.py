@@ -10,11 +10,19 @@ class SerializationError(Exception):
     Raised when serialization fails.
     """
 
+    def __init__(self, data: str, error: str) -> None:
+        self._data = data
+        self._error = error
+
 
 class DeserializationError(Exception):
     """
     Raised when deserialization fails.
     """
+
+    def __init__(self, data: str, error: str) -> None:
+        self._data = data
+        self._error = error
 
 
 class SimpleWebSocket(ABC):
@@ -53,13 +61,13 @@ class JsonSerializingWebSocket(SimpleWebSocket):
         try:
             return pydantic_serialize(msg)
         except Exception as e:
-            raise SerializationError(e.args)
+            raise SerializationError(data=msg, error=str(e))
 
     def _deserialize(self, buffer):
         try:
             return json.loads(buffer)
         except Exception as e:
-            raise DeserializationError(e.args)
+            raise DeserializationError(data=buffer, error=str(e))
 
     async def send(self, data):
         await self._websocket.send(self._serialize(data))

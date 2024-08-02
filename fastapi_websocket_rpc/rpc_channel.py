@@ -6,6 +6,8 @@ from inspect import _empty, signature
 import json
 from typing import Any, Awaitable, Callable, Coroutine, Dict, Generic, List, Optional, Protocol, Type, cast
 
+from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from fastapi_websocket_rpc.simplewebsocket import SerializerT
@@ -225,7 +227,7 @@ class RpcChannel(Generic[MethodsT, SerializerT]):
         Handle an incoming RPC message
         This is the main function servers/clients using the channel need to call (upon reading a message on the wire)
         """
-        logger.info("Message received: {data}")
+        logger.info(f"Message received: {data}")
         error = None
         try:
             request = pydantic_parse(RpcRequest, data)
@@ -247,7 +249,6 @@ class RpcChannel(Generic[MethodsT, SerializerT]):
             pass
         logger.error(f"Invalid message received: {data}")
         response=RpcErrorResponse(
-            id="-1",
             error=RpcError(
                 code=error_code.INVALID_REQUEST,
                 message="Invalid Request - The JSON sent is not a valid Request object.",
@@ -340,52 +341,53 @@ class RpcChannel(Generic[MethodsT, SerializerT]):
             "Handling RPC request - %s", {"request": request, "channel": self.id}
         )
         # Ignore "_" prefixed methods (except the built in "_ping_")
-        method = self.methods.get_method(request.method)
-        if callable(method):
-            try:
-                arguments = request.params if request.params is not None else {}
-                result = await method(self.methods, **arguments)
-                if isinstance(result, NoResponseType):
-                    return
-                # get indicated type
-                result_type = self.get_return_type(method)
-                # if no type given - try to convert to string
-                if result_type is str and type(result) is not str:
-                    result = str(result)
-                response = RpcResponse[result_type](
-                    id=request.id,
-                    result=result,
-                )
-            except ValidationError as e:
-                response = RpcErrorResponse(
-                    id=request.id,
-                    error=RpcError(
-                        code=error_code.INVALID_PARAMS,
-                        message=f"Invalid params - {request.params}.",
-                        data=json.loads(e.json())
-                    ),
-                )
-            except Exception as e:
-                response = RpcErrorResponse(
-                    id=request.id,
-                    error=RpcError(
-                        code=error_code.INTERNAL_ERROR,
-                        message=str(e),
-                    ),
-                )
-        else:
-            logger.error(
-                "Method not found - %s",
-                {"method": request.method, "channel": self.id},
-            )
-            response=RpcErrorResponse(
-                id=request.id,
-                error=RpcError(
-                    code=error_code.METHOD_NOT_FOUND,
-                    message=f"Method not found - {request.method}.",
-                    data=request.method,
-                ),
-            )
+        match request.method:
+            case BuiltInMethods.ping:
+                result = await self.methods._ping_()
+                response = RpcResponse(result=result)
+            case BuiltInMethods.get_channel_id:
+                result = await self.methods._get_channel_id_()
+                response = RpcResponse(result=result)
+            case _:
+                method = self.methods.get_method(request.method)
+                if method is not None:
+                    try:
+                        response = await method.app(self.methods, request)
+                    except RequestValidationError as e:
+                        response = RpcErrorResponse(
+                            error=RpcError(
+                                code=error_code.INVALID_PARAMS,
+                                message=f"Invalid params - {request.params}.",
+                                data=e.errors()
+                            ),
+                        )
+                    except HTTPException as e:
+                        response = RpcErrorResponse(
+                            error=RpcError(
+                                code=e.status_code,
+                                message=e.detail,
+                            ),
+                        )
+                    except Exception as e:
+                        response = RpcErrorResponse(
+                            error=RpcError(
+                                code=error_code.INTERNAL_ERROR,
+                                message=str(e),
+                            ),
+                        )
+                else:
+                    logger.error(
+                        "Method not found - %s",
+                        {"method": request.method, "channel": self.id},
+                    )
+                    response=RpcErrorResponse(
+                        error=RpcError(
+                            code=error_code.METHOD_NOT_FOUND,
+                            message=f"Method not found - {request.method}.",
+                            data=request.method,
+                        ),
+                    )
+        response.id = request.id
         await self.send(response)
 
     def get_saved_promise(self, call_id: str | None) -> RpcPromise:

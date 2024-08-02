@@ -94,10 +94,10 @@ class WebsocketRPCEndpoint:
                         logger.info(f"Client messege failed - {websocket.client.port} :: {channel.id}") # type: ignore
                         await channel.send(
                             RpcErrorResponse(
-                                id="-1",
                                 error=RpcError(
                                     code=error_code.INTERNAL_ERROR,
                                     message="Internal error - Failed to deserialize server message.",
+                                    data=e._data,
                                 )
                             )
                         )
@@ -106,10 +106,10 @@ class WebsocketRPCEndpoint:
                         logger.info(f"Server messege failed - {websocket.client.port} :: {channel.id}") # type: ignore
                         await channel.send(
                             RpcErrorResponse(
-                                id="-1",
                                 error=RpcError(
                                     code=error_code.PARSE_ERROR,
                                     message="Parse error - Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.",
+                                    data=e._data,
                                 )
                             )
                         )
@@ -130,7 +130,10 @@ class WebsocketRPCEndpoint:
             self.manager.disconnect(websocket)
 
     async def handle_disconnect(self, websocket: WebSocket, channel: RpcChannel):
-        await websocket.close()
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
         self.manager.disconnect(websocket)
         await channel.on_disconnect()
 

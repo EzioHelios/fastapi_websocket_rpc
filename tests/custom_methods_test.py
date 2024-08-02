@@ -23,12 +23,14 @@ uri = f"ws://localhost:{PORT}/ws/{CLIENT_ID}"
 
 class RpcCalculator(RpcMethodsBase):
 
+    @staticmethod
     @rpc_call("add")
-    async def add(self, a: float, b: float) -> float:
+    async def add(a: float, b: float) -> float:
         return a + b
 
+    @staticmethod
     @rpc_call("multiply")
-    async def multiply(self, a: float, b: float) -> float:
+    async def multiply(a: float, b: float) -> float:
         return a * b
 
 

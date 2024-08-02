@@ -1,9 +1,8 @@
 from enum import Enum
 from typing import Any, Dict, Generic, Literal, Optional, TypeVar
 
+from fastapi._compat import PYDANTIC_V2
 from pydantic import BaseModel
-
-from .utils import is_pydantic_pre_v2
 
 UUID = str
 
@@ -27,17 +26,17 @@ ResponseT = TypeVar("ResponseT")
 
 
 # Check pydantic version to handle deprecated GenericModel
-if is_pydantic_pre_v2():
-    from pydantic.generics import GenericModel
+if PYDANTIC_V2:
 
-    class RpcResponse(GenericModel, Generic[ResponseT]):
+    class RpcResponse(BaseModel, Generic[ResponseT]):
         jsonrpc: Literal["2.0"] = "2.0"
         id: Optional[UUID] = None
         result: ResponseT
 
 else:
+    from pydantic.generics import GenericModel
 
-    class RpcResponse(BaseModel, Generic[ResponseT]):
+    class RpcResponse(GenericModel, Generic[ResponseT]):
         jsonrpc: Literal["2.0"] = "2.0"
         id: Optional[UUID] = None
         result: ResponseT

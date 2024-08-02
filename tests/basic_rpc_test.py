@@ -10,14 +10,10 @@ import uvicorn
 from fastapi import FastAPI
 
 from fastapi_websocket_rpc.rpc_methods import RpcUtilityMethods
-from fastapi_websocket_rpc.logger import logging_config, LoggingModes, get_logger
 from fastapi_websocket_rpc.schemas import RpcResponse
 from fastapi_websocket_rpc.websocket_rpc_client import WebSocketRpcClient
 from fastapi_websocket_rpc.websocket_rpc_endpoint import WebsocketRPCEndpoint
 from fastapi_websocket_rpc.utils import gen_uid
-
-# Set debug logs (and direct all logs to UVICORN format)
-logging_config.set_mode(LoggingModes.UVICORN, logging.DEBUG)
 
 # Configurable
 PORT = int(os.environ.get("PORT") or "9000")

@@ -1,11 +1,9 @@
 import asyncio
 import uvicorn
 from fastapi import FastAPI
-from fastapi_websocket_rpc import RpcMethodsBase, WebsocketRPCEndpoint,logger
+from fastapi_websocket_rpc import RpcMethodsBase, WebsocketRPCEndpoint
 import random
 
-#Set debug logging
-logger.logging_config.set_mode(logger.LoggingModes.UVICORN, logger.logging.DEBUG)
 
 # Methods to expose to the clients
 class ConcatServer(RpcMethodsBase):

@@ -5,11 +5,9 @@ from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 from .connection_manager import ConnectionManager
 from .rpc_channel import OnConnectCallback, OnDisconnectCallback, RpcChannel
 from .rpc_methods import RpcMethodsBase
-from .logger import get_logger
+from .logger import logger
 from .schemas import RpcError, RpcErrorResponse, WebSocketFrameType, error_code
 from .simplewebsocket import DeserializationError, SerializationError, SimpleWebSocket, JsonSerializingWebSocket
-
-logger = get_logger("RPC_ENDPOINT")
 
 
 class WebSocketSimplifier(SimpleWebSocket):

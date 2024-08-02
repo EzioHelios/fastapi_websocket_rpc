@@ -23,15 +23,13 @@ from .rpc_channel import (
     OnConnectCallback,
     OnDisconnectCallback,
 )
-from .logger import get_logger
+from .logger import logger
 from .simplewebsocket import (
     ClientT,
     SerializerT,
     SimpleWebSocket,
     JsonSerializingWebSocket,
 )
-
-logger = get_logger("RPC_CLIENT")
 
 try:
     import websocket

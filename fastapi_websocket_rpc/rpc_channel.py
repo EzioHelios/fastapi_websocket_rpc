@@ -12,12 +12,10 @@ from pydantic import ValidationError
 
 from fastapi_websocket_rpc.simplewebsocket import SerializerT
 
-from .logger import get_logger
+from .logger import logger
 from .rpc_methods import BuiltInMethods, MethodsT, NoResponse, NoResponseType, RpcMethodsBase
 from .schemas import RpcError, RpcErrorResponse, RpcRequest, RpcResponse, error_code
 from .utils import gen_uid, pydantic_parse
-
-logger = get_logger("RPC_CHANNEL")
 
 
 class DEFAULT_TIMEOUT:

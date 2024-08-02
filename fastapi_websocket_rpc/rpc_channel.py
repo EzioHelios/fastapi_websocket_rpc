@@ -367,6 +367,11 @@ class RpcChannel(Generic[MethodsT, SerializerT]):
                             ),
                         )
                     except Exception as e:
+                        logger.error(
+                            "Error occurred while handling request - %s",
+                            {"request": request, "channel": self.id, "error": e},
+                            exc_info=True,
+                        )
                         response = RpcErrorResponse(
                             error=RpcError(
                                 code=error_code.INTERNAL_ERROR,
